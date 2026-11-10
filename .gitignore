@@ -1,4 +1,5 @@
 node_modules/
+release/market-fork/
 client-src/.bundle.js
 client-src/.test-bundle.js
 *.log
