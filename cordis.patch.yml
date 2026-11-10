@@ -1,0 +1,10 @@
+# dsh-remote-agent bundle patch.
+#
+# The bundle installs one Host row plus the Client module declared by
+# package.json `dsh.client`. The Host half owns the SSH pool, remote file
+# operations, harness discovery and remote PTY sessions; the Client half is the
+# workbench UI (sidebar panel icon + main panel).
+- insert:
+    - id: remote-agent
+      name: dsh-remote-agent
+      config: {}

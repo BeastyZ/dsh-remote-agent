@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Remote agent",
+    "description": "SSH into Linux servers, open a remote directory as a workspace, run any installed agent harness (Codex, Kimi, Claude, …), browse and edit remote files, use remote terminals, review Git changes/diffs, create worktrees for parallel agents, and forward remote ports."
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "name": "dsh-remote-agent",
+  "version": "1.0.0",
+  "private": false,
+  "description": "Remote agent workbench for DeepSeek Harness: SSH into Linux servers, run any installed agent harness, edit remote files, use remote terminals, review Git changes/diffs, create worktrees for parallel agents, and preview remote ports.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "dsh": ">=0.2.2-rc.1 <0.3.0-0"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "ssh",
+    "remote-development",
+    "terminal",
+    "codex",
+    "kimi",
+    "claude"
+  ],
+  "author": "BeastyZ",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BeastyZ/dsh-remote-agent.git"
+  },
+  "homepage": "https://github.com/BeastyZ/dsh-remote-agent#readme",
+  "bugs": {
+    "url": "https://github.com/BeastyZ/dsh-remote-agent/issues"
+  },
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "client.js",
+    "cordis.patch.yml",
+    "host",
+    "icon.svg",
+    "index.js",
+    "locale/*.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node --check index.js && node --check client.js && node --check host/terminal.js && node --check host/terminal-archive.js && node --check host/terminal-history.js",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "@xterm/addon-canvas": "^0.7.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "esbuild": "^0.25.0",
+    "node-pty": "^1.1.0-beta5"
+  },
+  "dependencies": {
+    "@xterm/headless": "^5.5.0"
+  }
+}

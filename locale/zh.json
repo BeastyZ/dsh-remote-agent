@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "远程 Agent",
+    "description": "直连 Linux 服务器，把远程目录作为工作区，运行服务器上已安装的任意 Agent harness（Codex、Kimi、Claude 等），浏览与编辑远程文件，使用远程终端，查看 Git 更改/diff，创建 worktree 并行运行 Agent，并转发远程端口做预览。"
+  }
+}
