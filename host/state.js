@@ -17,6 +17,7 @@ const EMPTY = {
     strictHostKeyChecking: 'accept-new',
     controlPersistSeconds: 600,
     harnessCacheTtlMs: 10 * 60 * 1000,
+    notificationsEnabled: true,
   },
   harnessCache: {},
 }

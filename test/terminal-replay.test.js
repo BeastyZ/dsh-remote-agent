@@ -6,6 +6,20 @@ import { createTerminalInput } from '../client-src/terminal-input.js'
 import { TerminalSession } from '../host/terminal.js'
 
 const DA = '\x1b[c\x1b[>c'
+test('only actual user input cancels a pending dialogue read; live DA replies do not', async () => {
+  const term = new Headless.Terminal({ cols: 80, rows: 20 });
+  let cancelled = 0;
+  const forwarded = [];
+  const input = createTerminalInput(term, data => forwarded.push(data), { onUserInput: () => cancelled++ });
+  input.finishReplay();
+  await new Promise(resolve => term.write(DA, resolve));
+  assert.equal(cancelled, 0);
+  term._core.coreService.triggerDataEvent('explicit typing', true);
+  assert.equal(cancelled, 1);
+  assert.equal(forwarded.at(-1), 'explicit typing');
+  input.dispose(); term.dispose();
+});
+
 const DA_RESPONSES = ['\x1b[?1;2c', '\x1b[>0;276;0c']
 function terminal() {
   const term = new Headless.Terminal({ cols: 120, rows: 40, scrollback: 8000 })

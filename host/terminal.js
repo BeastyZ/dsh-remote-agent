@@ -250,12 +250,20 @@ export class TerminalHub {
   }
 
   list() { return Array.from(this.sessions.values()).map(s => s.summary()) }
+  observableSessions() {
+    return Array.from(this.sessions.values()).map(s => ({
+      ...s.summary(), total: s.total, start: s.start,
+      buffer: s.buffer,
+    }))
+  }
   get(id) { return this.sessions.get(id) }
   runningCount() { return Array.from(this.sessions.values()).filter(s => !s.exited).length }
 
   async spawn(session, host) {
     const remote = session.tmuxPath
-      ? `exec ${tmuxCommand(session)} attach-session -t ${shq(session.remoteName)}`
+      // Configure the session on every attach, so saved pre-upgrade sessions
+      // gain native wheel/copy-mode scrolling without relaunching their Agent.
+      ? `${tmuxCommand(session)} set-option -t ${shq(session.remoteName)} mouse on && exec ${tmuxCommand(session)} attach-session -t ${shq(session.remoteName)}`
       : remoteBootstrap(session.cwd, session.command, session.title)
     const argv = await this.pool.ptyArgv(host, remote)
     const handle = await this.ctx.subprocess.spawnTerminal({
@@ -363,6 +371,19 @@ export class TerminalHub {
     session.generation++
     try { return await this.spawn(session, host) }
     catch (error) { session.checkpoint(); return { ok: false, code: 'SPAWN', message: error.message } }
+  }
+
+  async resetScroll(id) {
+    const session = this.get(id)
+    if (!session) return { ok: false, code: 'NO_SESSION', message: 'Terminal not found.' }
+    if (!session.tmuxPath || session.exited) return { ok: true }
+    const host = this.pool.resolveHost(session.hostId)
+    if (!host) return { ok: false, code: 'NO_HOST', message: 'Original SSH connection not found.' }
+    const tmux = tmuxCommand(session)
+    const target = shq(session.remoteName)
+    // Cancel tmux's presentation-only copy mode, never send a keystroke to the
+    // Agent. Returning from local dialogue review must restore the live prompt.
+    return this.pool.exec(host, `review_mode=$(${tmux} display-message -p -t ${target} '#{pane_in_mode}') || exit $?; if [ "$review_mode" = 1 ]; then ${tmux} send-keys -X -t ${target} cancel; fi`, { timeoutMs: 8000, maxBytes: 4096 })
   }
 
   async write(id, data) {

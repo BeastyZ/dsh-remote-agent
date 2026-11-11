@@ -87,11 +87,26 @@ export function CustomAgentModal({ onClose, onSubmit, initial = '' }) {
     }, item))));
 }
 
-export function SettingsModal({ settings, configPath, hosts, stateDir, onClose, onSave, onRemoveManual }) {
+function NotificationSettings({ enabled, onChange, onTest }) {
+  const [testing, setTesting] = React.useState(false);
+  const test = async () => {
+    setTesting(true);
+    try { await onTest(); } finally { setTesting(false); }
+  };
+  return h('div', { className: 'ra-field' },
+    h('label', { className: 'ra-notification-toggle' },
+      h('input', { type: 'checkbox', checked: enabled, onChange: event => onChange(event.target.checked) }),
+      h('span', { className: 'ra-field-label' }, t('settings.notifications'))),
+    h('p', { className: 'ra-muted ra-about' }, t('settings.notificationsHint')),
+    h(Button, { disabled: !enabled || testing, onClick: test }, testing ? t('misc.loading') : t('settings.testNotification')));
+}
+
+export function SettingsModal({ settings, configPath, hosts, stateDir, onClose, onSave, onRemoveManual, onTestNotification }) {
   const [form, setForm] = React.useState({
     sshConfigPath: settings?.sshConfigPath || configPath || '',
     strictHostKeyChecking: settings?.strictHostKeyChecking || 'accept-new',
     controlPersistSeconds: settings?.controlPersistSeconds || 600,
+    notificationsEnabled: settings?.notificationsEnabled !== false,
   });
   const manual = (hosts || []).filter((item) => item.source === 'manual');
   return h(Modal, {
@@ -124,6 +139,11 @@ export function SettingsModal({ settings, configPath, hosts, stateDir, onClose, 
       h('span', { className: 'ra-field-label' }, t('settings.stateDir')),
       h('div', { className: 'ra-mono ra-muted' }, stateDir || '~/.dsh/remote-agent')),
     h('div', { className: 'ra-divider' }),
+    settings?.notificationPlatform?.available ? h(NotificationSettings, {
+      enabled: form.notificationsEnabled,
+      onChange: enabled => setForm(prev => ({ ...prev, notificationsEnabled: enabled })),
+      onTest: onTestNotification,
+    }) : null,
     h('div', { className: 'ra-field' },
       h('span', { className: 'ra-field-label' }, t('settings.hosts')),
       manual.length

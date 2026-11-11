@@ -3,11 +3,11 @@
 // already used by the canvas addon's internal renderer contract. Keep this
 // small boundary next to the pinned xterm version, rather than guessing from
 // escape sequences (which would break mouse and focus protocols).
-export function createTerminalInput(term, forward) {
+export function createTerminalInput(term, forward, { onUserInput } = {}) {
   let replaying = true
   let pendingUserInput = 0
   let queuedInput = []
-  const userInput = term._core.coreService.onUserInput(() => { pendingUserInput++ })
+  const userInput = term._core.coreService.onUserInput(() => { pendingUserInput++; onUserInput?.(); })
   const data = term.onData((chunk) => {
     if (pendingUserInput > 0) {
       pendingUserInput--

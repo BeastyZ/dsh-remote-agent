@@ -6,7 +6,7 @@ import {
   SettingsIcon, Spinner, TerminalIcon,
 } from './icons.jsx';
 import { Button, IconButton, Toast, copyText } from './ui.jsx';
-import { TerminalView } from './TerminalView.jsx';
+import { TerminalView, TerminalHistory } from './TerminalView.jsx';
 import { FilesPanel } from './FilesPanel.jsx';
 import { GitPanel } from './GitPanel.jsx';
 import {
@@ -54,6 +54,7 @@ export function Workbench({ ctx }) {
   const [portsOpen, setPortsOpen] = React.useState(false);
   const [detectedPorts, setDetectedPorts] = React.useState({});
   const [renameSession, setRenameSession] = React.useState(null);
+  const [historyOpen, setHistoryOpen] = React.useState(false);
   const [settings, setSettings] = React.useState(null);
   const [configPath, setConfigPath] = React.useState('');
   const [warnings, setWarnings] = React.useState([]);
@@ -685,6 +686,7 @@ export function Workbench({ ctx }) {
         h('div', { className: 'ra-head-actions' },
           host ? h(StatusBadge, { status: statuses[hostId] || {}, onClick: () => connectHost(hostId, { force: true }) }) : null,
           h(IconButton, { title: t('ports.title'), onClick: () => { refreshForwards(); setPortsOpen(true); } }, h(LinkIcon, { size: 15 })),
+          active ? h(IconButton, { title: t('terminal.history'), active: historyOpen, onClick: () => setHistoryOpen(open => !open) }, '↕') : null,
           workspace ? h(IconButton, { title: t('sessions.new'), onClick: () => launch(null, '') }, h(TerminalIcon, { size: 15 })) : null,
           workspace ? h(IconButton, { title: t('agent.scan'), onClick: () => refreshHarness(hostId, workspace.id, true) }, h(RefreshIcon, { size: 15 })) : null)),
       hostTerminals.length ? h('div', { className: 'ra-tabs' }, hostTerminals.map((item) => h('div', {
@@ -763,9 +765,17 @@ export function Workbench({ ctx }) {
           onWorkspaceRemoved: dropWorkspace,
         })) : null) : null,
     h(Toast, { toast, onClose: () => setToast(null) }),
+    historyOpen && active ? h(TerminalHistory, {
+      key: active.id + ':' + (active.generation || 0), session: active, rpc,
+      onClose: () => setHistoryOpen(false),
+    }) : null,
     modal && modal.kind === 'settings' ? h(SettingsModal, {
       settings, configPath, hosts, stateDir: boot?.settings?.stateDir || '',
       onClose: () => setModal(null), onSave: saveSettings,
+      onTestNotification: async () => {
+        try { await rpc('notification.test'); notify(t('settings.notificationSent'), 'success'); }
+        catch (error) { notify(error.message, 'error'); }
+      },
       onRemoveManual: async (id) => {
         try { await rpc('hosts.removeManual', { id }); reloadHosts(); } catch (error) { notify(error.message, 'error'); }
       },

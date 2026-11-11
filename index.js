@@ -20,7 +20,10 @@ import { parseSshConfig } from './host/sshconfig.js'
 import { Store } from './host/state.js'
 import { SshPool } from './host/ssh.js'
 import { TerminalHub } from './host/terminal.js'
+import { loadAgentHistory } from './host/agent-history.js'
 import { detectHarnesses } from './host/harness.js'
+import { AgentCompletionTracker } from './host/agent-completion.js'
+import { LocalNotifier } from './host/notifications.js'
 import * as files from './host/files.js'
 import * as git from './host/git.js'
 import { ForwardManager } from './host/forwards.js'
@@ -30,7 +33,7 @@ export const name = 'dsh-remote-agent'
 export const inject = ['webServer', 'subprocess']
 
 const RPC_PATH = '/remote-agent/api/rpc'
-const VERSION = '1.0.1'
+const VERSION = '1.1.0'
 
 function stateRoot() {
   const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
@@ -130,6 +133,19 @@ export function apply(ctx) {
     migrationFile: new URL('./.legacy-terminals.json', import.meta.url),
   })
   const forwards = new ForwardManager(ctx, pool)
+  const historySources = new Map()
+  const notifications = new LocalNotifier()
+  const completion = new AgentCompletionTracker({
+    sessions: () => store.settings().notificationsEnabled ? terminals.observableSessions() : [],
+    onComplete: async ({ session, reason, exitCode }) => {
+      const workspace = store.get().workspaces.find(item => item.id === session.workspaceId)
+      const body = reason === 'idle'
+        ? `${session.title} 已完成一轮任务${workspace ? ` · ${workspace.name}` : ''}`
+        : `${session.title} 已退出${exitCode == null ? '' : ` · 退出码 ${exitCode}`}`
+      try { await notifications.send({ title: '远程 Agent 已完成', body }) }
+      catch (error) { ctx.logger.warn('Local completion notification failed', error.message) }
+    },
+  })
 
   function ok(value) {
     return { ok: true, value }
@@ -199,6 +215,8 @@ export function apply(ctx) {
           sshConfigPath: state.settings.sshConfigPath || loadHosts().configPath,
           strictHostKeyChecking: state.settings.strictHostKeyChecking,
           stateDir: dir,
+          notificationsEnabled: state.settings.notificationsEnabled,
+          notificationPlatform: notifications.capability(),
         },
         activeTerminals: state.activeTerminals || {},
         terminals: terminals.list(),
@@ -417,6 +435,26 @@ export function apply(ctx) {
       return fromResult(await terminals.resume(id, resolveHost(session.hostId), { restart: params?.restart === true }))
     },
 
+    async 'term.history'(params) {
+      const session = terminals.get(String(params?.id || ''))
+      if (!session) return fail('NO_SESSION', 'Terminal not found.')
+      const host = resolveHost(session.hostId)
+      if (!host) return fail('NO_HOST', 'Original SSH connection not found.')
+      const key = session.id + ':' + session.generation
+      if (params?.sourceId && historySources.get(key) !== params.sourceId) return fail('HISTORY_SOURCE', 'Reload dialogue history before paging.')
+      const result = await loadAgentHistory({
+        pool, host, session, before: params?.before, sourceId: params?.sourceId,
+      })
+      if (result.available && result.sourceId) {
+        historySources.set(key, result.sourceId)
+        if (!params?.sourceId) {
+          const reset = await terminals.resetScroll(session.id)
+          if (!reset.ok) return fromResult(reset)
+        }
+      }
+      return fromResult(result)
+    },
+
     async 'term.read'(params) {
       return fromResult(await terminals.read(String(params?.id || ''), Number(params?.offset) || 0, Number(params?.waitMs) || 0))
     },
@@ -552,7 +590,16 @@ export function apply(ctx) {
         sshConfigPath: settings.sshConfigPath || loadHosts().configPath,
         stateDir: dir,
         configPath: loadHosts().configPath,
+        notificationPlatform: notifications.capability(),
       })
+    },
+
+    async 'notification.test'() {
+      if (!store.settings().notificationsEnabled) return fail('DISABLED', 'Enable agent completion notifications first.')
+      try {
+        await notifications.send({ title: 'Remote agent', body: '这是来自远程 Agent 工作台的 macOS 测试通知。' })
+        return ok({ sent: true })
+      } catch (error) { return fail('NOTIFICATION', error.message) }
     },
 
     async 'settings.set'(params) {
@@ -564,6 +611,7 @@ export function apply(ctx) {
       }
       if (Number(next.controlPersistSeconds) > 0) settings.controlPersistSeconds = Math.floor(Number(next.controlPersistSeconds))
       if (Number(next.harnessCacheTtlMs) > 0) settings.harnessCacheTtlMs = Math.floor(Number(next.harnessCacheTtlMs))
+      if (typeof next.notificationsEnabled === 'boolean') settings.notificationsEnabled = next.notificationsEnabled
       store.save()
       loadHosts(true)
       return ok({ settings })
@@ -645,6 +693,7 @@ export function apply(ctx) {
   })
 
   ctx.effect(() => () => {
+    completion.dispose()
     forwards.dispose().catch(() => {})
     pool.dispose().catch(() => {})
     terminals.dispose().catch(() => {})

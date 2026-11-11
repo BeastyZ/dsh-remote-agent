@@ -107,6 +107,7 @@ test('tmux reconnect uses the original remote session without relaunching comman
   const created = await a.create({ host: f.host, cwd: '/work', command: 'kimi', title: 'Kimi' })
   assert(created.session.persistent)
   assert(f.handles[0].spec.argv[1].includes('attach-session'))
+  assert(f.handles[0].spec.argv[1].includes("set-option -t 'dsh-" + created.session.id + "' mouse on && exec"), 'enable mouse on the exact isolated session before attach')
   await a.dispose()
   const b = f.hub()
   assert.equal(b.list()[0].state, 'detached')

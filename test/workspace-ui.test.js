@@ -19,10 +19,11 @@ const B = {id:'session-B',hostId:'server',workspaceId:'w-beta',cwd:'/beta',title
 const workspaceA = {id:'w-alpha',hostId:'server',name:'alpha',path:'/alpha'}
 const workspaceB = {id:'w-beta',hostId:'server',name:'beta',path:'/beta'}
 const boot = {
-  version:'1.0.1',hosts:[{id:'server',name:'Server',detail:'demo'}],
+  version:'1.1.0',hosts:[{id:'server',name:'Server',detail:'demo'}],
   workspaces:[workspaceA,workspaceB],terminals:[A,B],
   lastHostId:'server',lastWorkspaceId:'w-alpha',
-  activeTerminals:{'w-alpha':'session-A','w-beta':'session-B'},warnings:[],settings:{},
+  activeTerminals:{'w-alpha':'session-A','w-beta':'session-B'},warnings:[],
+  settings:{notificationsEnabled:true,notificationPlatform:{platform:'darwin',available:true}},
 }
 const calls=[]
 async function rpc(method,params={}) {
@@ -33,6 +34,10 @@ async function rpc(method,params={}) {
   if(method==='harness.list') return {harnesses:[],env:{}}
   if(method==='git.info') return {isRepo:false,entries:[]}
   if(method==='forward.list') return {forwards:[]}
+  if(method==='settings.set') return {settings:{...boot.settings,...params.settings}}
+  if(method==='notification.test') return {sent:true}
+  if(method==='settings.get') return boot.settings
+  if(method==='hosts.refresh') return {hosts:boot.hosts}
   return {ok:true}
 }
 function texts(node,output=[]) {
@@ -55,6 +60,7 @@ test('WorkBench retains the session of each chosen workspace while switching',as
       import React from 'react';
       import { Workbench as Loaded } from './client-src/Workbench.jsx'
       import {setReact} from './client-src/runtime.js';
+      import './client-src/i18n.js';
       setReact(React);
       export const Workbench = Loaded;
     `,resolveDir:path.resolve('.'),sourcefile:'entry.jsx',loader:'jsx'},
@@ -62,7 +68,7 @@ test('WorkBench retains the session of each chosen workspace while switching',as
     external: ['react'],
     plugins:[{name:'test',setup(b){
       b.onResolve({filter:/(TerminalView|FilesPanel|GitPanel)/},()=>({path:'child',namespace:'stub'}))
-      b.onLoad({filter:/^child$/,namespace:'stub'},()=>({contents:'export function TerminalView(){return null} export function FilesPanel(){return null} export function GitPanel(){return null}'}))
+      b.onLoad({filter:/^child$/,namespace:'stub'},()=>({contents:'export function TerminalView(){return null} export function TerminalHistory(){return null} export function FilesPanel(){return null} export function GitPanel(){return null}'}))
       b.onResolve({filter:/\/api$/},()=>({path:'api',namespace:'stub'}))
       b.onLoad({filter:/^api$/,namespace:'stub'},()=>({contents:'export function rpc(method,params){return fetch("/rpc",{method:"POST",body:JSON.stringify({method,params})}).then(r=>r.json()).then(v=>v.value)}'}))
     }}],
@@ -70,6 +76,7 @@ test('WorkBench retains the session of each chosen workspace while switching',as
   const previousFetch=global.fetch
   global.fetch=async (_url,options)=>({json:async()=>({ok:true,value:await rpc(JSON.parse(options.body).method,JSON.parse(options.body).params)})})
   globalThis.window={addEventListener(){},removeEventListener(){}}
+  globalThis.document={addEventListener(){},removeEventListener(){}}
   t.after(()=>{
     global.fetch=previousFetch
     globalThis.window=previousWindow
@@ -99,7 +106,24 @@ test('WorkBench retains the session of each chosen workspace while switching',as
   assert(alphaRow)
   await act(async()=>{alphaRow.props.onClick('w-alpha')})
   await settle()
-  assert(texts(renderer.toJSON()).join(' ').includes('Kimi Alpha'))
-  assert(!texts(renderer.toJSON()).join(' ').includes('Codex Beta'))
+  const buttonTitles=renderer.root.findAllByType('button').map(node=>node.props.title)
+  assert(buttonTitles.some(title=>title==='Remote agent settings'),'settings entry rendered: '+JSON.stringify(buttonTitles.slice(0,12)))
+  const settingsButton=renderer.root.findAllByType('button').find(node=>node.props.title==='Remote agent settings')
+  await act(async()=>{settingsButton.props.onClick()})
+  await settle()
+  assert(texts(renderer.toJSON()).join(' ').includes('Notify me when an agent completes a task'),'mounted settings includes completion notification')
+  const checkbox=renderer.root.findByProps({type:'checkbox'})
+  assert.equal(checkbox.props.checked,true)
+  await act(async()=>{checkbox.props.onChange({target:{checked:false}})})
+  const disabledTest=renderer.root.findAllByType('button').find(node=>texts(node).join(' ').includes('Test notification'))
+  assert.equal(disabledTest.props.disabled,true,'unsaved disabled preference cannot test')
+  await act(async()=>{checkbox.props.onChange({target:{checked:true}})})
+  const enabledTest=renderer.root.findAllByType('button').find(node=>texts(node).join(' ').includes('Test notification'))
+  await act(async()=>{enabledTest.props.onClick()})
+  assert(calls.some(call=>call.method==='notification.test'),'mounted test invokes Host RPC')
+  const save=renderer.root.findAllByType('button').find(node=>texts(node).join(' ').includes('Save settings'))
+  await act(async()=>{save.props.onClick()})
+  await settle()
+  assert(calls.some(call=>call.method==='settings.set'&&call.params.settings.notificationsEnabled===true),'preference saved')
   await act(async()=>renderer.unmount())
 })

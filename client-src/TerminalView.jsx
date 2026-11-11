@@ -4,6 +4,9 @@ import { FitAddon } from '@xterm/addon-fit';
 import { CanvasAddon } from '@xterm/addon-canvas';
 import { replayOutput } from './terminal-replay.js';
 import { createTerminalInput } from './terminal-input.js';
+import { handleTerminalWheel } from './terminal-wheel.js';
+import { createDialogueScrollback } from './terminal-dialogue.js';
+export { TerminalHistory } from './TerminalHistory.jsx';
 
 function themeFromPage() {
   const style = getComputedStyle(document.documentElement);
@@ -27,9 +30,11 @@ function themeFromPage() {
 
 export function TerminalView({ session, rpc, active, onExited, onReconnect, onRestart, onOutput }) {
   const hostRef = React.useRef(null);
+  const dialogueHostRef = React.useRef(null);
   const termRef = React.useRef(null);
   const [status, setStatus] = React.useState(session.state || 'running');
   const [exitCode, setExitCode] = React.useState(session.exitCode ?? null);
+  const [historyLoading, setHistoryLoading] = React.useState(false);
 
   React.useEffect(() => {
     const node = hostRef.current;
@@ -57,6 +62,7 @@ export function TerminalView({ session, rpc, active, onExited, onReconnect, onRe
     const canvas = new CanvasAddon();
     term.loadAddon(canvas);
     let stopped = false;
+    let dialogue = null;
     let offset = 0;
     let pendingSize = null;
     let sendingSize = false;
@@ -101,6 +107,7 @@ export function TerminalView({ session, rpc, active, onExited, onReconnect, onRe
             term.resize(Math.max(2, Math.floor(available / cellWidth)), term.rows);
           }
         }
+        dialogue?.resize();
       } catch { return Promise.resolve(); /* container not laid out yet */ }
       if (term.cols > 1 && term.rows > 1) {
         return syncSize(term.cols, term.rows).catch(() => {});
@@ -126,7 +133,57 @@ export function TerminalView({ session, rpc, active, onExited, onReconnect, onRe
           .catch(() => {});
       }
     };
-    const input = createTerminalInput(term, send);
+    const input = createTerminalInput(term, send, { onUserInput: () => dialogue?.hide() });
+    dialogue = createDialogueScrollback({
+      read: params => rpc('term.history', { id: session.id, ...params }),
+      forward: data => { if (session.state === 'running') send(data); },
+      isStopped: () => stopped,
+      onLoading: setHistoryLoading,
+      labels: { user: t('terminal.user'), assistant: t('terminal.agent') },
+      createView({ onInput, onClose }) {
+        const host = dialogueHostRef.current;
+        const review = new Terminal({
+          cols: term.cols, rows: term.rows, scrollback: 100000,
+          fontFamily: term.options.fontFamily, fontSize: term.options.fontSize,
+          lineHeight: term.options.lineHeight, cursorBlink: false,
+          theme: themeFromPage(),
+        });
+        const reviewFit = new FitAddon();
+        // xterm must measure a visible container before its Canvas addon opens.
+        // A display:none initial measurement would leave a blank review grid.
+        host.style.display = 'block';
+        try {
+        review.loadAddon(reviewFit);
+        review.open(host);
+        review.loadAddon(new CanvasAddon());
+        const typed = review.onData(onInput);
+        review.attachCustomWheelEventHandler(event => dialogue.handleHistoryWheel(event));
+        review.attachCustomKeyEventHandler(event => {
+          if (event.type !== 'keydown') return true;
+          if (event.key === 'Escape') { onClose(); event.preventDefault(); return false; }
+          if (event.key === 'PageUp' || event.key === 'PageDown') {
+            review.scrollPages(event.key === 'PageUp' ? -1 : 1);
+            event.preventDefault(); return false;
+          }
+          return true;
+        });
+        return {
+          term: review,
+          fit: () => { reviewFit.fit(); if (review.cols > term.cols) review.resize(term.cols, review.rows); },
+          show() { host.style.display = 'block'; node.style.visibility = 'hidden'; },
+          hide() { host.style.display = 'none'; node.style.visibility = ''; term.focus(); },
+          dispose() { typed.dispose(); review.dispose(); },
+        };
+        } catch (error) {
+          review.dispose(); host.style.display = 'none'; node.style.visibility = '';
+          throw error;
+        }
+      },
+    });
+    term.attachCustomWheelEventHandler(event => {
+      if (session.persistent && dialogue.handleLiveWheel(event)) return false;
+      return handleTerminalWheel(event, term);
+    });
 
     (async function poll() {
       if (document.fonts?.ready) await document.fonts.ready.catch(() => {});
@@ -180,6 +237,7 @@ export function TerminalView({ session, rpc, active, onExited, onReconnect, onRe
       clearTimeout(later);
       observer.disconnect();
       input.dispose();
+      dialogue?.dispose();
       term.dispose();
       termRef.current = null;
     };
@@ -191,6 +249,8 @@ export function TerminalView({ session, rpc, active, onExited, onReconnect, onRe
 
   return h('div', { className: 'ra-term-wrap' + (session.state !== 'running' ? ' is-archived' : '') },
     h('div', { ref: hostRef, className: 'ra-term' }),
+    h('div', { ref: dialogueHostRef, className: 'ra-term ra-dialogue', style: { display: 'none' }, 'aria-label': t('terminal.history') }),
+    historyLoading ? h('div', { className: 'ra-history-loading', role: 'status' }, t('terminal.historyLoading')) : null,
     status !== 'running'
       ? h('div', { className: 'ra-term-saved' },
         h('div', { className: 'ra-term-saved-copy' },
