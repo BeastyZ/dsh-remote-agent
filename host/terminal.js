@@ -29,8 +29,9 @@ function tmuxCommand(session) {
 }
 
 export class TerminalSession {
-  constructor({ id, hostId, title, cwd, command = '', handle = null, archive, record = {} }) {
+  constructor({ id, hostId, title, cwd, command = '', workspaceId = '', handle = null, archive, record = {} }) {
     Object.assign(this, { id, hostId, title, cwd, command, archive })
+    this.workspaceId = record.workspaceId || workspaceId
     this.createdAt = record.createdAt || Date.now()
     this.lastSeen = Date.now()
     this.buffer = String(record.buffer || '').slice(-RING_CHARS)
@@ -178,7 +179,7 @@ export class TerminalSession {
 
   summary() {
     return {
-      id: this.id, hostId: this.hostId, title: this.title, cwd: this.cwd,
+      id: this.id, hostId: this.hostId, workspaceId: this.workspaceId, title: this.title, cwd: this.cwd,
       command: this.command, createdAt: this.createdAt, state: this.state,
       exitCode: this.exitCode, note: this.exitNote, cols: this.cols, rows: this.rows,
       persistent: Boolean(this.tmuxPath), generation: this.generation,
@@ -196,7 +197,8 @@ export class TerminalSession {
 }
 
 export class TerminalHub {
-  constructor(ctx, pool, { archiveDir, migrationFile } = {}) {
+  constructor(ctx, pool, { archiveDir, workspaces = () => [], migrationFile } = {}) {
+    this.workspaces = workspaces
     this.ctx = ctx
     this.pool = pool
     this.sessions = new Map()
@@ -222,6 +224,13 @@ export class TerminalHub {
   restore(record) {
     if (this.sessions.has(record.id)) return this.sessions.get(record.id)
     const session = new TerminalSession({ ...record, archive: this.archive, record })
+    if (!session.workspaceId) {
+      const workspace = this.workspaces().find(item => item.hostId === session.hostId && item.path === session.cwd)
+      if (workspace) {
+        session.workspaceId = workspace.id
+        this.archive?.save(session.snapshot()) // exact saved cwd, no remote query
+      }
+    }
     this.sessions.set(session.id, session)
     return session
   }
@@ -290,12 +299,12 @@ export class TerminalHub {
     return this.withCapacity(() => this._create(options))
   }
 
-  async _create({ host, cwd, command = '', title = 'terminal', cols = 100, rows = 26 }) {
+  async _create({ host, cwd, command = '', title = 'terminal', workspaceId = '', cols = 100, rows = 26 }) {
     if (!host) return { ok: false, code: 'NO_HOST', message: 'Unknown connection.' }
     const conn = await this.pool.ensure(host)
     if (!conn.ok) return conn
     const id = 't-' + randomBytes(6).toString('hex')
-    const session = new TerminalSession({ id, hostId: host.id, title, cwd, command, archive: this.archive, record: dimensions(cols, rows) })
+    const session = new TerminalSession({ id, hostId: host.id, title, cwd, command, workspaceId, archive: this.archive, record: dimensions(cols, rows) })
     // Persist before launching anything on the server.
     this.archive?.save(session.snapshot())
     this.sessions.set(id, session)
@@ -321,7 +330,7 @@ export class TerminalHub {
     return this.exclusive(id, () => this._resume(id, host, restart))
   }
 
-  async _resume(id, host, restart) {
+  async _resume(id, host, restart, workspaceId = '') {
     const session = this.get(id)
     if (!session) return { ok: false, code: 'NO_SESSION', message: 'Terminal not found.' }
     if (!host || host.id !== session.hostId) return { ok: false, code: 'NO_HOST', message: 'Original SSH connection not found.' }

@@ -30,7 +30,7 @@ export const name = 'dsh-remote-agent'
 export const inject = ['webServer', 'subprocess']
 
 const RPC_PATH = '/remote-agent/api/rpc'
-const VERSION = '1.0.0'
+const VERSION = '1.0.1'
 
 function stateRoot() {
   const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
@@ -126,6 +126,7 @@ export function apply(ctx) {
   const pool = new SshPool(ctx, store, { stateDir: dir, resolveHost, askpassPath: askpass })
   const terminals = new TerminalHub(ctx, pool, {
     archiveDir: path.join(dir, 'terminals'),
+    workspaces: () => store.get().workspaces,
     migrationFile: new URL('./.legacy-terminals.json', import.meta.url),
   })
   const forwards = new ForwardManager(ctx, pool)
@@ -199,6 +200,7 @@ export function apply(ctx) {
           strictHostKeyChecking: state.settings.strictHostKeyChecking,
           stateDir: dir,
         },
+        activeTerminals: state.activeTerminals || {},
         terminals: terminals.list(),
       })
     },
@@ -358,6 +360,14 @@ export function apply(ctx) {
 
     async 'ws.select'(params) {
       store.setSelection(params?.hostId, params?.workspaceId)
+      const workspace = store.get().workspaces.find(ws => ws.id === params?.workspaceId)
+      return ok({ ok: true, activeTerminalId: workspace ? store.activeTerminal(workspace.id) : null })
+    },
+
+    async 'ws.selectTerminal'(params) {
+      const workspace = store.get().workspaces.find(item => item.id === String(params?.workspaceId || ''))
+      if (!workspace) return fail('NO_WORKSPACE', 'Workspace not found.')
+      store.setActiveTerminal(workspace.id, String(params?.terminalId || ''))
       return ok({ ok: true })
     },
 
@@ -391,6 +401,7 @@ export function apply(ctx) {
       const result = await terminals.create({
         host,
         cwd,
+        workspaceId: String(params?.workspaceId || ''),
         command: String(params?.command || ''),
         title: cleanText(params?.title, 120) || 'terminal',
         cols: Number(params?.cols) || 100,

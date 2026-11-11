@@ -11,6 +11,7 @@ const EMPTY = {
   workspaces: [],
   lastHostId: null,
   lastWorkspaceId: null,
+  activeTerminals: {},
   settings: {
     sshConfigPath: '',
     strictHostKeyChecking: 'accept-new',
@@ -42,6 +43,7 @@ export class Store {
       this.state.settings = { ...EMPTY.settings, ...(parsed.settings || {}) }
       if (!Array.isArray(this.state.manualHosts)) this.state.manualHosts = []
       if (!Array.isArray(this.state.workspaces)) this.state.workspaces = []
+      if (!this.state.activeTerminals || typeof this.state.activeTerminals !== 'object' || Array.isArray(this.state.activeTerminals)) this.state.activeTerminals = {}
       if (!this.state.harnessCache || typeof this.state.harnessCache !== 'object') this.state.harnessCache = {}
     } catch {
       // Missing or corrupt state starts clean rather than failing activation.
@@ -117,6 +119,17 @@ export class Store {
     if (hostId !== undefined) this.state.lastHostId = hostId
     if (workspaceId !== undefined) this.state.lastWorkspaceId = workspaceId
     this.save()
+  }
+
+  setActiveTerminal(workspaceId, terminalId) {
+    if (!workspaceId) return
+    if (terminalId) this.state.activeTerminals[workspaceId] = terminalId
+    else delete this.state.activeTerminals[workspaceId]
+    this.save()
+  }
+
+  activeTerminal(workspaceId) {
+    return workspaceId ? this.state.activeTerminals[workspaceId] : null
   }
 
   harnessCache(hostId) {

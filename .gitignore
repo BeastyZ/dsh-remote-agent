@@ -2,6 +2,7 @@ node_modules/
 release/market-fork/
 client-src/.bundle.js
 client-src/.test-bundle.js
+client-src/.test-suite.cjs
 *.log
 .DS_Store
 .legacy-terminals.json

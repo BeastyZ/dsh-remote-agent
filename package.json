@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote-agent",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": false,
   "description": "Remote agent workbench for DeepSeek Harness: SSH into Linux servers, run any installed agent harness, edit remote files, use remote terminals, review Git changes/diffs, create worktrees for parallel agents, and preview remote ports.",
   "type": "module",
@@ -69,7 +69,9 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "esbuild": "^0.25.0",
-    "node-pty": "^1.1.0-beta5"
+    "node-pty": "^1.1.0-beta5",
+    "react": "^19.1.0",
+    "react-test-renderer": "^19.1.0"
   },
   "dependencies": {
     "@xterm/headless": "^5.5.0"

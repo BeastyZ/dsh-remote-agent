@@ -1,4 +1,5 @@
 import { React, h, t, setLocale } from './runtime.js';
+import { workspaceSessions, chooseSession } from './workspace-selection.js';
 import { rpc } from './api.js';
 import {
   BranchIcon, Dot, EditIcon, FolderIcon, LinkIcon, PlayIcon, PlusIcon, RefreshIcon, ServerIcon,
@@ -61,6 +62,13 @@ export function Workbench({ ctx }) {
   const hostRef = React.useRef(null);
   const wsRef = React.useRef(null);
   const terminalsRef = React.useRef([]);
+  const workspacesRef = React.useRef([]);
+  const activeByWorkspace = React.useRef(new Map());
+  const openTerminal = React.useCallback((terminalId) => {
+    if (wsRef.current) activeByWorkspace.current.set(wsRef.current, terminalId);
+    setActiveTerm(terminalId);
+    rpc('ws.selectTerminal', { workspaceId: wsRef.current, terminalId }).catch(() => {});
+  }, []);
 
   const notify = React.useCallback((message, kind = 'info') => {
     setToast({ message, kind, id: Date.now() });
@@ -79,13 +87,13 @@ export function Workbench({ ctx }) {
   React.useEffect(() => {
     hostRef.current = hostId;
     wsRef.current = wsId;
-    terminalsRef.current = terminals;
-  }, [hostId, wsId, terminals]);
+    workspacesRef.current = workspaces;
+  }, [hostId, wsId, terminals, workspaces]);
 
   const host = hosts.find((item) => item.id === hostId) || null;
   const workspace = workspaces.find((item) => item.id === wsId) || null;
   const hostWorkspaces = workspaces.filter((item) => item.hostId === hostId);
-  const hostTerminals = hostId ? terminals.filter((item) => item.hostId === hostId) : [];
+  const hostTerminals = workspaceSessions(terminals, workspace);
   const active = hostTerminals.find((item) => item.id === activeTerm) || null;
 
   const refreshTerminals = React.useCallback(async () => {
@@ -93,11 +101,9 @@ export function Workbench({ ctx }) {
       const result = await rpc('term.list');
       const list = result.terminals || [];
       setTerminals(list);
-      const visible = hostRef.current ? list.filter((item) => item.hostId === hostRef.current) : [];
-      setActiveTerm((current) => {
-        if (current && visible.some((item) => item.id === current)) return current;
-        return visible.length ? visible[visible.length - 1].id : null;
-      });
+      const selected = workspacesRef.current.find(item => item.id === wsRef.current) || null;
+      const previous = activeByWorkspace.current.get(wsRef.current);
+      setActiveTerm((current) => chooseSession(current, previous, workspaceSessions(list, selected)));
     } catch { /* keep the last known list */ }
   }, []);
 
@@ -245,6 +251,8 @@ export function Workbench({ ctx }) {
   const adoptWorkspace = (ws) => {
     if (!ws) return;
     setWorkspaces((prev) => [...prev.filter((item) => item.id !== ws.id), ws]);
+    const next = workspaceSessions(terminals, ws);
+    setActiveTerm(chooseSession(activeByWorkspace.current.get(ws.id), null, next));
     setWsId(ws.id);
     rpc('ws.select', { hostId: ws.hostId, workspaceId: ws.id }).catch(() => {});
     connectHost(ws.hostId);
@@ -263,6 +271,7 @@ export function Workbench({ ctx }) {
         const data = await rpc('bootstrap');
         if (cancelled) return;
         setBoot(data);
+        activeByWorkspace.current = new Map(Object.entries(data.activeTerminals || {}));
         setHosts(data.hosts || []);
         setWorkspaces(data.workspaces || []);
         setTerminals(data.terminals || []);
@@ -275,8 +284,9 @@ export function Workbench({ ctx }) {
           ? data.lastWorkspaceId
           : (data.workspaces || []).find((item) => item.hostId === firstHost)?.id || null;
         setWsId(firstWs);
-        const bootTerminals = (data.terminals || []).filter((item) => item.hostId === firstHost);
-        setActiveTerm(bootTerminals.length ? bootTerminals[bootTerminals.length - 1].id : null);
+        const selectedWorkspace = (data.workspaces || []).find(item => item.id === firstWs);
+        const bootTerminals = workspaceSessions(data.terminals || [], selectedWorkspace);
+        setActiveTerm(chooseSession(activeByWorkspace.current.get(firstWs), null, bootTerminals));
         if (firstHost) connectHost(firstHost);
         if (firstHost && firstWs) setTimeout(() => refreshHarness(firstHost, firstWs), 250);
       } catch (error) {
@@ -285,16 +295,19 @@ export function Workbench({ ctx }) {
     })();
     return () => { cancelled = true; };
   }, []);
-
   React.useEffect(() => {
-    const timer = setInterval(refreshTerminals, 8000);
-    return () => clearInterval(timer);
-  }, [refreshTerminals]);
+    if (!boot) return;
+    const visible = workspaceSessions(terminals, workspace);
+    const previous = activeByWorkspace.current.get(wsId);
+    setActiveTerm((current) => chooseSession(current, previous, visible));
+  }, [wsId, hostId, boot]);
 
   const selectHost = (id) => {
     if (id === hostId) return;
     setHostId(id);
     const next = workspaces.find((item) => item.hostId === id);
+    const previous = activeByWorkspace.current.get(next?.id);
+    setActiveTerm(previous || null);
     setWsId(next ? next.id : null);
     rpc('ws.select', { hostId: id, workspaceId: next ? next.id : null }).catch(() => {});
     connectHost(id);
@@ -302,8 +315,11 @@ export function Workbench({ ctx }) {
   };
 
   const selectWorkspace = (id) => {
-    setWsId(id);
+    const previous = activeByWorkspace.current.get(id);
     const ws = workspaces.find((item) => item.id === id);
+    const visible = workspaceSessions(terminals, ws);
+    setActiveTerm(chooseSession(previous, null, visible));
+    setWsId(id);
     rpc('ws.select', { hostId: ws?.hostId || hostId, workspaceId: id }).catch(() => {});
     if (ws && ws.hostId !== hostId) setHostId(ws.hostId);
     if (ws) {
@@ -315,19 +331,21 @@ export function Workbench({ ctx }) {
   const launch = async (item, command) => {
     if (!workspace) { notify(t('welcome.pickWs'), 'error'); return; }
     if (!command && !item) { command = ''; }
+    const launchedWorkspace = wsId;
     const title = (item ? item.name : t('sessions.terminal')) + ' · ' + workspace.name;
     try {
       const result = await rpc('term.create', {
         hostId: workspace.hostId,
         cwd: workspace.path,
+        workspaceId: workspace.id,
         command: command || '',
         title,
         cols: 110,
         rows: 28,
       });
       const session = result.session;
-      setTerminals((prev) => [...prev.filter((entry) => entry.id !== session.id), session]);
-      setActiveTerm(session.id);
+      setTerminals((prev) => [...prev.filter(entry => entry.id !== session.id), session]);
+      if (wsRef.current === launchedWorkspace) openTerminal(session.id);
     } catch (error) {
       if (error.code === 'AUTH') setModal({ kind: 'password', hostId: workspace.hostId });
       notify(error.message, 'error');
@@ -338,7 +356,7 @@ export function Workbench({ ctx }) {
     try {
       const result = await rpc('term.resume', { id: session.id, restart });
       setTerminals((prev) => prev.map((item) => item.id === session.id ? { ...result.session } : item));
-      setActiveTerm(session.id);
+      openTerminal(session.id);
     } catch (error) {
       notify(error.message, 'error');
       if (error.code === 'AUTH') setModal({ kind: 'password', hostId: session.hostId });
@@ -387,6 +405,9 @@ export function Workbench({ ctx }) {
     try {
       await rpc('term.close', { id });
       setTerminals((prev) => prev.filter((item) => item.id !== id));
+      const deleted = terminals.find(item => item.id === id);
+      activeByWorkspace.current.delete(deleted?.workspaceId || workspace?.id);
+      rpc('ws.selectTerminal', { workspaceId: deleted?.workspaceId || workspace?.id, terminalId: null }).catch(() => {});
       setActiveTerm((current) => (current === id ? null : current));
     } catch (error) {
       notify(error.message, 'error');
@@ -411,6 +432,7 @@ export function Workbench({ ctx }) {
       const result = await rpc('ws.add', { hostId, path: pathValue });
       const ws = result.workspace;
       setWorkspaces((prev) => [...prev.filter((item) => item.id !== ws.id), ws]);
+      setActiveTerm(chooseSession(activeByWorkspace.current.get(ws.id), null, workspaceSessions(terminals, ws)));
       setWsId(ws.id);
       setModal(null);
       connectHost(ws.hostId);
@@ -425,7 +447,11 @@ export function Workbench({ ctx }) {
     try {
       await rpc('ws.remove', { id });
       setWorkspaces((prev) => prev.filter((item) => item.id !== id));
-      if (wsId === id) setWsId(null);
+      if (wsId === id) {
+        activeByWorkspace.current.delete(id);
+        setWsId(null);
+        setActiveTerm(null);
+      }
     } catch (error) {
       notify(error.message, 'error');
     }
@@ -513,7 +539,7 @@ export function Workbench({ ctx }) {
   const renderTerminalRow = (item) => h('div', {
     key: item.id,
     className: 'ra-session-row' + (item.id === activeTerm ? ' is-selected' : ''),
-    onClick: () => setActiveTerm(item.id),
+    onClick: () => openTerminal(item.id),
     onDoubleClick: () => setRenameSession(item),
     title: t('sessions.renameHint'),
   },
@@ -664,7 +690,7 @@ export function Workbench({ ctx }) {
       hostTerminals.length ? h('div', { className: 'ra-tabs' }, hostTerminals.map((item) => h('div', {
         key: item.id,
         className: 'ra-tab' + (item.id === activeTerm ? ' is-active' : ''),
-        onClick: () => setActiveTerm(item.id),
+        onClick: () => openTerminal(item.id),
         onDoubleClick: () => setRenameSession(item),
         title: item.title + ' · ' + t('sessions.renameHint'),
       },
